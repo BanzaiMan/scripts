@@ -27,49 +27,67 @@ currency2:
 require "rexml/document"
 require "rexml/xpath"
 require "open-uri"
+# require "pp"
 
-DATA_SOURCE_URL='http://www.ecb.int/stats/eurofxref/eurofxref-daily.xml'
+
+class Euro
+  DATA_SOURCE_URL='http://www.ecb.int/stats/eurofxref/eurofxref-daily.xml'
+  
+  attr_reader :data
+  
+  def initialize
+    open DATA_SOURCE_URL do |f|
+      @data = REXML::Document.new(f.read).elements[1]
+      raise RuntimeError, "Failed to obtain exchange rates" if @data.nil?
+    end
+  end
+  
+  def in(currency)
+    r=nil
+    # add Euro
+    euro = REXML::Element.new
+    euro.add_attributes 'rate' => '1', 'currency' => 'EUR'
+
+    REXML::XPath.each(@data, "//Cube[@time]/") do |e|
+      e.add_element euro
+      begin
+        r = e.elements.select {|el| el.attributes['currency'] == currency.upcase}.first.attributes['rate']
+      rescue Exception => e
+        # raise e
+      end
+    end
+    raise ArgumentError, "Unknown currency #{currency}" unless r
+    return r.to_f
+  end
+  
+  def method_missing(method_id)
+    if method_id.id2name =~ %r[\Ain_([A-Z]{3})\z]i
+      self.in($1)
+    else
+      super
+    end
+  end
+  
+end
+
+class Currency
+  def Currency.method_missing(method_id)
+    @@euro ||= Euro.new
+    
+    if method_id.id2name =~ %r[\A([A-Z]{3})_(?:to|in)_([A-Z]{3})\z]i
+      @@euro.in($2.upcase)/@@euro.in($1.upcase)
+    else
+      super
+    end
+  end
+end
+
 
 amount = (ARGV[0] =~ %r{\d+}) ? ARGV.shift : 1
 currency1 = ARGV.shift || 'EUR'
 currency2 = ARGV.shift || 'USD'
-euro_in_source = euro_in_target = nil
-known_currencies = []
 
-
-open DATA_SOURCE_URL do |f|
-  
-  data = REXML::Document.new(f.read).elements[1]
-  raise RuntimeError if data.nil?
-  
-  # add Euro
-  euro = REXML::Element.new
-  euro.add_attributes 'rate' => '1', 'currency' => 'EUR'
-  
-  REXML::XPath.each(data,"//Cube[@time]/") do |e|
-    e.add_element euro
-    puts "Date: #{e.attributes['time']}"
-    e.elements.each do |el|
-      known_currencies << [currency = el.attributes['currency']]
-      if currency == currency1.upcase
-        euro_in_source = el.attributes['rate'].to_f
-      end
-      if currency == currency2.upcase
-        euro_in_target = amount.to_f * el.attributes['rate'].to_f
-      end
-    end
-  end
-  
-  if euro_in_source.nil?
-    raise ArgumentError, "Unknown currency #{currency1.upcase}. Known currencies: #{known_currencies.sort.join ' '}"
-  end
-  if euro_in_target.nil?
-    raise ArgumentError, "Unknown currency #{currency2.upcase}. Known currencies: #{known_currencies.sort.join ' '}"
-  end
-  
-  puts "#{amount} #{currency1} = #{euro_in_target / euro_in_source} #{currency2}"
-  
-end
+puts amount * Currency.send("#{currency1}_to_#{currency2}".to_sym)
 
 __END__
 <?xml version="1.0" encoding="UTF-8"?>
